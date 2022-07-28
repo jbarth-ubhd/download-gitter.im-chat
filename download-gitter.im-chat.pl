@@ -21,6 +21,12 @@ if($h[5]!~/^Bearer [0-9a-fA-F]{40}$/) {
 }
 
 my $ua=LWP::UserAgent->new;
+sub getUrl {
+  my $url=shift;
+  my $resp=$ua->get($url, @h);
+  if(!$resp->is_success) { die "error get($url)\n"; }
+  return $resp->content;
+}
 sub getUrlCached {
   my $url=shift;
   my $md5="cache_".md5_hex($url).".json";
@@ -56,6 +62,13 @@ a { color: #aaf; }
   margin-left:25px;
   margin-bottom:10px;
 }
+.reply {
+  border: 0;
+  border-left: 1px;
+  border-color: #844;
+  border-style: dashed;
+  margin-left: 15px;
+}
 code,pre { }
 blockquote { background-color: #553; }
 .hl { background-color:#844; }
@@ -71,10 +84,37 @@ sub niceDate { my $d=shift;
   return "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;$d[2].$d[1].$d[0] $d[3]:$d[4]";
 }
 
+sub formatItem {
+  my $item = shift;
+  my $json = shift;  # for lookups
+  my $extra_class = shift;
+
+  my $tmp = "";
+
+  my $user=$json->{lookups}->{users}->{$item->{fromUser}};
+  # "thread" behaviour does not seem to align with the normal message behaviour,
+  # fall back to reading the data directly in this case:
+  if (not defined $user) {
+    $user = $item->{fromUser}
+  }
+
+  $tmp.="<div class='message $extra_class'>\n";
+  $tmp.="<div class='hd'>".$user->{displayName}." [".$user->{username}."] ".niceDate($item->{sent})."</div>\n";
+  # $item->{html}=~s"ocrd[_-]cis"<span class='hl'>ocrd_cis</span>"g;
+  # $item->{html}=~s"ocrd[_-]segment"<span class='hl'>ocrd_segment</span>"g;
+  # $item->{html}=~s"ocrd[_-]any"<span class='hl'>ocrd_any</span>"g;
+  # $item->{html}=~s"ocrd[_-]pc[_-]segment"<span class='hl'>ocrd_pc_segment</span>"g;
+  # $item->{html}=~s"sbb[_-]textline"<span class='hl'>sbb_textline</span>"g;
+  $tmp.="<div class='bdy'>".$item->{html}."</div>\n";
+  $tmp.="</div>\n";
+
+  return $tmp;
+}
+
 my $baseUrl="https://gitter.im/api/v1/rooms/$roomId/chatMessages?lookups%5B%5D=user&limit=100";
 my $topId="";
 my $html="";
-for(my $i=0; $i<99; $i++) {
+for(my $i=0; $i<999; $i++) {
   my $url=$baseUrl.(length($topId)?"&beforeId=$topId":"");
   print STDERR "get $url\n";
   my $json=decode_json(getUrlCached($url));
@@ -85,16 +125,22 @@ for(my $i=0; $i<99; $i++) {
     exit;
   }
 
-  my $tmp;
+  my $tmp = "";
   for my $item (@{$json->{items}}) {
-    my $user=$json->{lookups}->{users}->{$item->{fromUser}};
-    $tmp.="<div class='hd'>".$user->{displayName}." [".$user->{username}."] ".niceDate($item->{sent})."</div>\n";
-    # $item->{html}=~s"ocrd[_-]cis"<span class='hl'>ocrd_cis</span>"g;
-    # $item->{html}=~s"ocrd[_-]segment"<span class='hl'>ocrd_segment</span>"g;
-    # $item->{html}=~s"ocrd[_-]any"<span class='hl'>ocrd_any</span>"g;
-    # $item->{html}=~s"ocrd[_-]pc[_-]segment"<span class='hl'>ocrd_pc_segment</span>"g;
-    # $item->{html}=~s"sbb[_-]textline"<span class='hl'>sbb_textline</span>"g;
-    $tmp.="<div class='bdy'>".$item->{html}."</div>\n";
+    $tmp .= formatItem($item, $json);
+
+    # Retrieve thread if necessary
+    if ($item->{threadMessageCount} >= 1) {
+      my $chatId = $item->{id};
+      my $threadUrl="https://gitter.im/api/v1/rooms/$roomId/chatMessages/$chatId/thread?lookups%5B%5D=user";
+      # Retrieving uncached as the thread may have changed since the last run,
+      # and we have no way of invalidating the cache.
+      print STDERR "get $threadUrl (uncached)\n";
+      my $thread_json = decode_json(getUrl($threadUrl));
+      for my $thread_item (@{$thread_json}) {
+        $tmp .= formatItem($thread_item, $json, "reply");
+      }
+    }
   }
   $html=$tmp.$html;
 
